@@ -1,0 +1,454 @@
+---
+title: "Analisis de Encuestas de Hogares con R"
+subtitle: "Modulo 1. Analisis de Variables Continuas"
+date: "5 Septiembre 2022"
+Fecha de replicacion: "10 Septiembre 2022"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+library (survey)
+library(tidyverse)
+library (srvyr)
+library (TeachingSampling)
+library (haven)
+```
+
+Cargamos los datos y modificamos
+
+```{r setup, include=FALSE}
+ encuestaDOM20N1 <- readRDS("~/Desktop/R Studio/Estimacion de Areas Pequeñas/encuestaDOM20N1.rds")%>%
+   transmute(estrato = as.character(`_estrato`), # Para definir los estratos
+             upm = as.character (`_upm`), # Para definir los upm
+             fep = `_fep`, # Para definir los factores de expansion
+             zona = as_factor(areageo2), # Para definir las areas geograficas como un factor
+             sexo = as_factor(sexo), # Para definir el sexo como un factor
+             edad = edad,
+             lp, li, #Linea de pobreza y Linea de pobreza extrema
+             income = ingcorte,
+             anoest, #años de estudio
+            empleo = condact3)
+ 
+ # los factores componen una estructura de datos que nos permiten 
+ # manejar variables categoricas, en este caso: zona, sexo
+```
+
+## Definimos el diseño muestral con "srvyr"
+
+```{r}
+options (survey.lonely.psu = "adjust")
+
+diseno <-encuestaDOM20N1 %>% #definimos la base de datos
+  as_survey_design (
+    strata = estrato, #especificamos los estaros
+    ids = upm, #especificamos las observacion
+    weights = fep, #especificamos los factores de expansion
+    nest = T #valida que los estratos esten anidados
+  )
+
+summary(diseno)
+```
+
+## Analisis grafico
+
+## Histograma ponderado para la variable ingreso
+
+```{r}
+## Probabilidades
+svyhist(
+  ~ income,
+  diseno,
+  main = "",
+  col = "purple",
+  xlab = "ingreso",
+  probability = TRUE
+)
+```
+
+```{r}
+  ## Frecuencia
+
+  svyhist(
+  ~ income,
+  diseno,
+  main = "",
+  col = "blue",
+  xlab = "ingreso",
+  probability = FALSE
+)
+```
+
+## Dividimos la muestra en sub-grupos
+
+```{r}
+sub_urbana <- diseno %>% filter (zona == "Urbana")
+sub_rural <- diseno %>% filter (zona == "Rural")
+sub_hombres <- diseno %>% filter (sexo == "Hombre")
+sub_mujeres <- diseno %>% filter (sexo == "Mujer")
+```
+
+```{r}
+## Histograma ponderado para subgrupos
+## El ingreso en hombres mayores de 18 años
+svyhist(
+  ~ income,
+  design = subset(sub_hombres, edad >= 18),
+  main = "Hombres",
+  breaks = 30,
+  col = "blue",
+  xlab = "ingreso",
+)
+```
+
+```{r}
+## El ingreso en mujeres mayores de 18 años
+svyhist(
+  ~ income,
+  design = subset(sub_mujeres, edad >= 18),
+  main = "Mujeres",
+  breaks = 30,
+  col = "grey",
+  xlab = "ingreso",
+)
+```
+
+```{r}
+## Graficos de caja ponderados para subgrupos
+## Graficos de caja ponderados para la zona urbana
+par (mflow = c (1,2))
+svyboxplot(
+  income ~ 1,
+  sub_urbana,
+  col = "green",
+  xlab = "ingreso",
+)
+
+## Graficos de caja ponderados para la zona rural
+svyboxplot(
+  income ~ 1,
+  sub_rural,
+  col = "red",
+  xlab = "ingreso",
+)
+```
+
+# Estimaciones puntuales
+
+una estimacion puntual parte de una muestra n y n de una poblacion N, y queremos conocer el ingreso promedio de N pero no es viable. entonces tomamos n y calculamos el ingreso de los incluidos en n, esto nos permite inferir el ingreso estimado en N. por esto el maestro utilizó el termino suma ponderada
+
+## Estimaciones de totales e intervalos de confianza de la variable ingreso
+
+```{r}
+svytotal(~income,diseno,deff=T)%>%
+  data.frame()
+confint(svytotal(~income,diseno,deff=T)
+        ) # Que es el deff en esta funcion
+```
+
+## Estimaciones de totales en subgrupos
+
+## Hombres y Mujeres
+
+```{r}
+diseno %>% group_by (sexo) %>%
+  cascade (Total=survey_total(
+    income, level = 0.95,     # Level se refiere al nivel de confianza
+    vartype = c ("se","ci")), #Desviacio estandar y el coeficiente de variacion
+    .fill = "Nacional")
+```
+
+## Estimacion de la media en subgrupos
+
+## Hombres y Mujeres
+
+```{r}
+
+#Aqui calculamos el ingreso medio a nivel nacional con su respectivo intervalo de confianza
+svymean (~income, diseno,deff=T) %>%
+  data.frame()
+confint(svymean(~income,diseno,deff=T))
+
+#Aqui calculamos el ingreso medio por sel subgrupo sexo
+diseno %>% group_by (sexo) %>%
+  cascade (Total=survey_mean(
+    income, level = 0.95,     # Level se refiere al nivel de confianza
+    vartype = c ("se","ci")), #Desviacio estandar y el coeficiente de variacion
+    .fill = "Nacional")
+```
+
+```{r}
+
+#Aqui calculamos el ingreso medio a nivel nacional con varios subgrupos
+diseno %>% group_by (zona, sexo) %>%
+  cascade (
+    media = survey_mean(
+    income, level = 0.95,# Level se refiere al nivel de confianza
+    vartype = c ("se","ci")), #Desviacio estandar y el coeficiente de variacion
+    .fill = "Nacional")
+data.frame()
+```
+
+## Estableciendo una nueva linea de pobreza y pobleza extrema priorizando sexo
+
+(Solo cambiamos el orden de los grupos)
+
+```{r}
+diseno %>% group_by (sexo,zona) %>%
+  cascade (
+    media = survey_mean(
+    income, level = 0.95,# Level se refiere al nivel de confianza
+    vartype = c ("se","ci")), #Desviacio estandar y el coeficiente de variacion
+    .fill = "Nacional")
+data.frame()
+```
+
+## Estimacion de la varianza de los ingresos por subgrupos
+
+```{r}
+(tab_var <- diseno %>% group_by (zona) %>%
+  summarise (var = 
+  survey_var (
+  income, 
+  level = 0.95, # Level se refiere al nivel de confianza
+  vartype = c ("se","ci"),
+  ))) #Desviacio estandar y el coeficiente de variacion
+```
+
+## Estimacion de la desviancion estandar de los ingresos por subgrupos
+
+```{r}
+(tab_sd <- diseno %>% group_by (sexo,zona) %>%
+  summarise (sd = 
+  survey_sd (
+  income, 
+  level = 0.95,
+  vartype = c ("se","ci"),
+  )))
+  data.frame ()
+```
+
+## Estimacion de la mediana para el ingreso
+
+```{r}
+diseno %>% summarise(mediana=
+                       survey_median(
+                         income, 
+                         level = 0.95,
+                         vartype = c ("se","ci"),
+                         ))
+data.frame ()
+```
+
+## Estimancion de la mediana para los ingresos por subgrupos
+
+## Estimacion de la mediana por Zona
+
+```{r}
+diseno %>% group_by (zona) %>%
+  summarise (mediana = 
+  survey_median (
+  income, 
+  level = 0.95,
+  vartype = c ("se","ci"),
+  ))
+  data.frame ()
+```
+
+## Estimacion de la mediana por Sexo y Zona
+
+```{r}
+diseno %>% group_by (sexo,zona) %>%
+  summarise (mediana = 
+  survey_median (
+  income, 
+  level = 0.95,
+  vartype = c ("se","ci"),
+  ))
+  data.frame ()
+```
+
+## Estimacion por quintiles de ingreso
+
+### Estimacion para el quintil de ingresos 0.5
+
+```{r}
+diseno %>% 
+  summarise (Q = survey_quantile (
+  income,
+  quantiles = 0.5, #Dejando el 50% por encima y el 50% por debajo
+  level = 0.95,
+  vartype = c ("se","ci"),
+  interval_type = "score"
+  ))
+  data.frame ()
+```
+
+### Estimacion para el quintil de ingresos 0.25
+
+```{r}
+diseno %>% 
+  summarise (Q = survey_quantile (
+  income,
+  quantiles = 0.25, #Dejando el 50% por encima y el 50% por debajo
+  level = 0.95,
+  vartype = c ("se","ci"),
+  interval_type = "score"
+  ))
+  data.frame ()
+```
+
+### Estimacion para el quintil de ingresos 0.75
+
+```{r}
+diseno %>% 
+  summarise (Q = survey_quantile (
+  income,
+  quantiles = 0.75, #Dejando el 50% por encima y el 50% por debajo
+  level = 0.95,
+  vartype = c ("se","ci"),
+  interval_type = "score"
+  ))
+  data.frame ()
+```
+
+## Estimacion por quintiles de ingreso segun subgrupos
+
+### Estimacion para el quintil de ingresos 0.50
+
+```{r}
+diseno %>% group_by(sexo) %>%
+  summarise (Q = survey_quantile (
+  income,
+  quantiles = 0.50, #Dejando el 50% por encima y el 50% por debajo
+  level = 0.95,
+  vartype = c ("se","ci"),
+  interval_type = "score"
+  ))
+  data.frame ()
+```
+
+### Estimacion para el quintil de ingresos 0.25 y 0.75
+
+### El rango intercuantilico se interpreta como, que el 50% de la poblacion tiene ingresos entre 5,708.33 y 14,416.67 para el caso de los hombres y entre 5,3957.33 y 13,333.33 para las mujeres
+
+```{r}
+diseno %>% group_by(sexo) %>%
+  summarise (Q = survey_quantile (
+  income,
+  quantiles = c(0.25,0.75), #Dejando el 50% por encima y el 50% por debajo
+  level = 0.95,
+  vartype = c ("se","ci"),
+  interval_type = "score"
+  ))
+  data.frame ()
+```
+
+## Estimacion por ratios o razon
+
+```{r}
+diseno %>% summarise (
+  Razon = survey_ratio (
+  numerator = (sexo=="Mujer"), ## creando una variable dummy para mujeres
+  denominator = (sexo=="Hombre"), ## creando una variable dummy para hombres
+  level = 0.95,
+  vartype = c ("se","ci"),
+  ))
+  data.frame ()
+```
+
+En este caso se estima que hay mas mujeres que hombres.
+
+```{r}
+sub_rural %>% summarise (
+  Razon = survey_ratio (
+  numerator = (sexo=="Mujer"), ## creando una variable dummy para mujeres
+  denominator = (sexo=="Hombre"), ## creando una variable dummy para hombres
+  level = 0.95,
+  vartype = c ("se","ci"),
+  ))
+  data.frame ()
+```
+
+En este caso se estima que hay mas hombres que mujeres.
+
+# Pruebas de hipotesis
+
+## Prueba de hipotesis de diferencia de medias
+
+```{r, echo=FALSE}
+
+## primero estimamos el ingreso medio por sexo
+
+diseno %>% group_by(sexo) %>% 
+  summarise (
+  Media = survey_mean (
+  income, ## creando una variable dummy para hombres
+  level = 0.95,
+  vartype = c ("se","ci"),
+  ))
+  data.frame ()
+```
+
+## Prueba de hipotesis de diferencia de medias de los ingresos entre hombres y mujeres
+
+```{r, echo=FALSE}
+svyttest(income~sexo,diseno)
+
+## Como interpretar este test?
+## Cuando la diferencia es significativa?
+```
+
+## Prueba de hipotesis de diferencia de medias de los ingresos entre hombres y mujeres en la zona urbana
+
+```{r, echo=FALSE}
+sub_urbana %>% group_by(sexo)%>%
+  summarise(
+    media=survey_mean(
+      income,
+      level = 0.95,
+      vartype = c ("se","ci"),
+  ))
+  data.frame ()
+```
+
+```{r, echo=FALSE}
+svyttest(income~sexo,sub_urbana)
+
+svyttest(income~sexo,sub_rural)
+```
+
+```{r, echo=FALSE}
+svyttest(income ~ sexo, diseno %>%
+           filter( edad > 18,empleo == 1))
+```
+
+```{r, echo=FALSE}
+svyttest(income ~ sexo, diseno %>%
+           filter( edad > 18,empleo == 2))
+```
+
+## Describir los resultados
+
+```{r}
+## Replicando los codigos de la capacitacion
+diseno %>% mutate (pobreza=ifelse(income<=lp,1,0)) %>%
+                  group_by(sexo,zona) %>%
+                    summarise(survey_mean(pobreza))
+```
+
+En este caso se especifica el porcentaje de hombre y mujeres que de encuentran por debajo de la lina de pobreza
+
+```{r}
+## Replicando los codigos de la capacitacion
+diseno %>% mutate (pobreza=ifelse(income<=li,1,0)) %>%
+                  group_by(sexo,zona) %>%
+                    summarise(survey_mean(pobreza))
+```
+
+En este caso se especifica el porcentaje de hombre y mujeres que de encuentran por debajo de la lina de pobreza extrema
+
+## Calculando el indice de Gini (Tarea)
+
+```{r}
+library(REAT)
+```
